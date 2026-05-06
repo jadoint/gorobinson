@@ -1,0 +1,30 @@
+# Binaries
+gorobinson
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go build
+*.out
+
+# Go workspace file (if not sharing workspace config)
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
