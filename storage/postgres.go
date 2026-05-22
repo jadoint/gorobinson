@@ -150,34 +150,74 @@ func (p *Postgres) ProcessText(tokens map[string]int, cat Category, act Action) 
 	return nil
 }
 
-// upsertToken inserts or updates a single token row within the transaction.
+// upsertToken inserts, updates, deletes, or skips a single token row within
+// the transaction.
 func (p *Postgres) upsertToken(tx *sql.Tx, word string, count int, isSpam, isLearn bool) error {
-	delta := int64(count)
-	if !isLearn {
-		delta = -delta
+	if isLearn {
+		return p.learnToken(tx, word, int64(count), isSpam)
 	}
 
+	var current TokenCount
+	q := fmt.Sprintf(
+		`SELECT count_ham, count_spam FROM %s WHERE token = $1 FOR UPDATE`,
+		p.table,
+	)
+	err := tx.QueryRow(q, word).Scan(&current.CountHam, &current.CountSpam)
+	rowExists := true
+	if errors.Is(err, sql.ErrNoRows) {
+		rowExists = false
+	} else if err != nil {
+		return fmt.Errorf("storage/postgres: upsertToken select: %w", err)
+	}
+
+	mutation := applyCountMutation(current, rowExists, int64(count), isSpam, isLearn)
+	if mutation.Delete {
+		q = fmt.Sprintf(`DELETE FROM %s WHERE token = $1`, p.table)
+		if _, err = tx.Exec(q, word); err != nil {
+			return fmt.Errorf("storage/postgres: upsertToken delete: %w", err)
+		}
+	} else if mutation.Upsert && rowExists {
+		q = fmt.Sprintf(
+			`UPDATE %s SET count_ham = $1, count_spam = $2 WHERE token = $3`,
+			p.table,
+		)
+		if _, err = tx.Exec(q, mutation.Count.CountHam, mutation.Count.CountSpam, word); err != nil {
+			return fmt.Errorf("storage/postgres: upsertToken update: %w", err)
+		}
+	} else if mutation.Upsert {
+		q = fmt.Sprintf(
+			`INSERT INTO %s (token, count_ham, count_spam) VALUES ($1, $2, $3)`,
+			p.table,
+		)
+		if _, err = tx.Exec(q, word, mutation.Count.CountHam, mutation.Count.CountSpam); err != nil {
+			return fmt.Errorf("storage/postgres: upsertToken insert: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *Postgres) learnToken(tx *sql.Tx, word string, count int64, isSpam bool) error {
 	var q string
 	if isSpam {
 		q = fmt.Sprintf(`
 			INSERT INTO %s (token, count_ham, count_spam)
-			VALUES ($1, 0, GREATEST(0, $2))
+			VALUES ($1, 0, $2)
 			ON CONFLICT (token) DO UPDATE
-			SET count_spam = GREATEST(0, %s.count_spam + $2)`,
+			SET count_spam = %s.count_spam + $2`,
 			p.table, p.table,
 		)
 	} else {
 		q = fmt.Sprintf(`
 			INSERT INTO %s (token, count_ham, count_spam)
-			VALUES ($1, GREATEST(0, $2), 0)
+			VALUES ($1, $2, 0)
 			ON CONFLICT (token) DO UPDATE
-			SET count_ham = GREATEST(0, %s.count_ham + $2)`,
+			SET count_ham = %s.count_ham + $2`,
 			p.table, p.table,
 		)
 	}
 
-	if _, err := tx.Exec(q, word, delta); err != nil {
-		return fmt.Errorf("storage/postgres: upsertToken: %w", err)
+	if _, err := tx.Exec(q, word, count); err != nil {
+		return fmt.Errorf("storage/postgres: learnToken: %w", err)
 	}
 	return nil
 }
@@ -185,32 +225,72 @@ func (p *Postgres) upsertToken(tx *sql.Tx, word string, count int, isSpam, isLea
 // updateInternals increments or decrements the internals row within the
 // transaction.
 func (p *Postgres) updateInternals(tx *sql.Tx, isSpam, isLearn bool) error {
-	delta := int64(1)
-	if !isLearn {
-		delta = -1
+	if isLearn {
+		return p.learnInternals(tx, isSpam)
 	}
 
+	var current Internals
+	q := fmt.Sprintf(
+		`SELECT count_ham, count_spam FROM %s WHERE token = $1 FOR UPDATE`,
+		p.table,
+	)
+	err := tx.QueryRow(q, MetaKey).Scan(&current.TextsHam, &current.TextsSpam)
+	rowExists := true
+	if errors.Is(err, sql.ErrNoRows) {
+		rowExists = false
+	} else if err != nil {
+		return fmt.Errorf("storage/postgres: updateInternals select: %w", err)
+	}
+
+	counts := TokenCount{CountHam: current.TextsHam, CountSpam: current.TextsSpam}
+	mutation := applyCountMutation(counts, rowExists, 1, isSpam, isLearn)
+	if mutation.Delete {
+		q = fmt.Sprintf(`DELETE FROM %s WHERE token = $1`, p.table)
+		if _, err = tx.Exec(q, MetaKey); err != nil {
+			return fmt.Errorf("storage/postgres: updateInternals delete: %w", err)
+		}
+	} else if mutation.Upsert && rowExists {
+		q = fmt.Sprintf(
+			`UPDATE %s SET count_ham = $1, count_spam = $2 WHERE token = $3`,
+			p.table,
+		)
+		if _, err = tx.Exec(q, mutation.Count.CountHam, mutation.Count.CountSpam, MetaKey); err != nil {
+			return fmt.Errorf("storage/postgres: updateInternals update: %w", err)
+		}
+	} else if mutation.Upsert {
+		q = fmt.Sprintf(
+			`INSERT INTO %s (token, count_ham, count_spam) VALUES ($1, $2, $3)`,
+			p.table,
+		)
+		if _, err = tx.Exec(q, MetaKey, mutation.Count.CountHam, mutation.Count.CountSpam); err != nil {
+			return fmt.Errorf("storage/postgres: updateInternals insert: %w", err)
+		}
+	}
+	return nil
+}
+
+func (p *Postgres) learnInternals(tx *sql.Tx, isSpam bool) error {
 	var q string
 	if isSpam {
 		q = fmt.Sprintf(`
 			INSERT INTO %s (token, count_ham, count_spam)
-			VALUES ($1, 0, GREATEST(0, $2))
+			VALUES ($1, 0, 1)
 			ON CONFLICT (token) DO UPDATE
-			SET count_spam = GREATEST(0, %s.count_spam + $2)`,
+			SET count_spam = %s.count_spam + 1`,
 			p.table, p.table,
 		)
 	} else {
 		q = fmt.Sprintf(`
 			INSERT INTO %s (token, count_ham, count_spam)
-			VALUES ($1, GREATEST(0, $2), 0)
+			VALUES ($1, 1, 0)
 			ON CONFLICT (token) DO UPDATE
-			SET count_ham = GREATEST(0, %s.count_ham + $2)`,
+			SET count_ham = %s.count_ham + 1`,
 			p.table, p.table,
 		)
 	}
 
-	if _, err := tx.Exec(q, MetaKey, delta); err != nil {
-		return fmt.Errorf("storage/postgres: updateInternals: %w", err)
+	if _, err := tx.Exec(q, MetaKey); err != nil {
+		return fmt.Errorf("storage/postgres: learnInternals: %w", err)
 	}
 	return nil
 }

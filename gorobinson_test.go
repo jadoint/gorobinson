@@ -121,6 +121,23 @@ func TestClassifyNoDataReturnsHalf(t *testing.T) {
 	}
 }
 
+func TestClassifyZeroCountTokenReturnsFiniteNeutralScore(t *testing.T) {
+	store := newMemStorage()
+	store.tokens["poison"] = storage.TokenCount{}
+	c := gorobinson.New(store)
+
+	score, err := c.Classify("poison")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if math.IsNaN(score) || math.IsInf(score, 0) {
+		t.Fatalf("expected finite score, got %v", score)
+	}
+	if score != 0.5 {
+		t.Fatalf("expected neutral score for zero-count token, got %v", score)
+	}
+}
+
 func TestLearnAndClassifySpam(t *testing.T) {
 	store := newMemStorage()
 	c := gorobinson.New(store)

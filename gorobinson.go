@@ -281,8 +281,12 @@ func (c *Classifier) robinsonProbability(data storage.TokenCount, textsHam, text
 		relSpam = float64(data.CountSpam) / float64(textsSpam)
 	}
 
-	rating := relSpam / (relHam + relSpam)
 	all := float64(data.CountHam + data.CountSpam)
+	if all <= 0 || relHam+relSpam <= 0 {
+		return c.config.RobX
+	}
+
+	rating := relSpam / (relHam + relSpam)
 	return (c.config.RobS*c.config.RobX + all*rating) / (c.config.RobS + all)
 }
 

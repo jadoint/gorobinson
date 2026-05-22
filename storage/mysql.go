@@ -168,37 +168,26 @@ func (m *MySQL) upsertToken(tx *sql.Tx, word string, count int, isSpam, isLearn 
 		return fmt.Errorf("storage/mysql: upsertToken select: %w", err)
 	}
 
-	delta := int64(count)
-	if !isLearn {
-		delta = -delta
-	}
-
-	if isSpam {
-		current.CountSpam += delta
-	} else {
-		current.CountHam += delta
-	}
-	if current.CountHam < 0 {
-		current.CountHam = 0
-	}
-	if current.CountSpam < 0 {
-		current.CountSpam = 0
-	}
-
-	if rowExists {
+	mutation := applyCountMutation(current, rowExists, int64(count), isSpam, isLearn)
+	if mutation.Delete {
+		q = fmt.Sprintf("DELETE FROM `%s` WHERE token = ?", m.table)
+		if _, err = tx.Exec(q, word); err != nil {
+			return fmt.Errorf("storage/mysql: upsertToken delete: %w", err)
+		}
+	} else if mutation.Upsert && rowExists {
 		q = fmt.Sprintf(
 			"UPDATE `%s` SET count_ham = ?, count_spam = ? WHERE token = ?",
 			m.table,
 		)
-		if _, err = tx.Exec(q, current.CountHam, current.CountSpam, word); err != nil {
+		if _, err = tx.Exec(q, mutation.Count.CountHam, mutation.Count.CountSpam, word); err != nil {
 			return fmt.Errorf("storage/mysql: upsertToken update: %w", err)
 		}
-	} else {
+	} else if mutation.Upsert {
 		q = fmt.Sprintf(
 			"INSERT INTO `%s` (token, count_ham, count_spam) VALUES (?, ?, ?)",
 			m.table,
 		)
-		if _, err = tx.Exec(q, word, current.CountHam, current.CountSpam); err != nil {
+		if _, err = tx.Exec(q, word, mutation.Count.CountHam, mutation.Count.CountSpam); err != nil {
 			return fmt.Errorf("storage/mysql: upsertToken insert: %w", err)
 		}
 	}
@@ -221,37 +210,27 @@ func (m *MySQL) updateInternals(tx *sql.Tx, isSpam, isLearn bool) error {
 		return fmt.Errorf("storage/mysql: updateInternals select: %w", err)
 	}
 
-	delta := int64(1)
-	if !isLearn {
-		delta = -1
-	}
-
-	if isSpam {
-		current.TextsSpam += delta
-	} else {
-		current.TextsHam += delta
-	}
-	if current.TextsHam < 0 {
-		current.TextsHam = 0
-	}
-	if current.TextsSpam < 0 {
-		current.TextsSpam = 0
-	}
-
-	if rowExists {
+	counts := TokenCount{CountHam: current.TextsHam, CountSpam: current.TextsSpam}
+	mutation := applyCountMutation(counts, rowExists, 1, isSpam, isLearn)
+	if mutation.Delete {
+		q = fmt.Sprintf("DELETE FROM `%s` WHERE token = ?", m.table)
+		if _, err = tx.Exec(q, MetaKey); err != nil {
+			return fmt.Errorf("storage/mysql: updateInternals delete: %w", err)
+		}
+	} else if mutation.Upsert && rowExists {
 		q = fmt.Sprintf(
 			"UPDATE `%s` SET count_ham = ?, count_spam = ? WHERE token = ?",
 			m.table,
 		)
-		if _, err = tx.Exec(q, current.TextsHam, current.TextsSpam, MetaKey); err != nil {
+		if _, err = tx.Exec(q, mutation.Count.CountHam, mutation.Count.CountSpam, MetaKey); err != nil {
 			return fmt.Errorf("storage/mysql: updateInternals update: %w", err)
 		}
-	} else {
+	} else if mutation.Upsert {
 		q = fmt.Sprintf(
 			"INSERT INTO `%s` (token, count_ham, count_spam) VALUES (?, ?, ?)",
 			m.table,
 		)
-		if _, err = tx.Exec(q, MetaKey, current.TextsHam, current.TextsSpam); err != nil {
+		if _, err = tx.Exec(q, MetaKey, mutation.Count.CountHam, mutation.Count.CountSpam); err != nil {
 			return fmt.Errorf("storage/mysql: updateInternals insert: %w", err)
 		}
 	}
