@@ -3,6 +3,7 @@ package gorobinson
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 // Degenerator produces alternative forms ("degenerates") of a word so that
@@ -23,11 +24,9 @@ var (
 )
 
 // StandardDegenerator is the default Degenerator implementation.
-// It is safe for concurrent read-only use after construction. The cache is
-// populated lazily and is not concurrency-safe for writes; if concurrent
-// learning is required, callers should construct a new StandardDegenerator per
-// goroutine or guard access with a mutex.
+// It is safe for concurrent use.
 type StandardDegenerator struct {
+	mu    sync.RWMutex
 	cache map[string][]string
 }
 
@@ -50,9 +49,12 @@ func (d *StandardDegenerator) Degenerate(words []string) map[string][]string {
 // degenerateWord returns the cached degenerate list for word, computing and
 // caching it on the first call.
 func (d *StandardDegenerator) degenerateWord(word string) []string {
+	d.mu.RLock()
 	if cached, ok := d.cache[word]; ok {
+		d.mu.RUnlock()
 		return cached
 	}
+	d.mu.RUnlock()
 
 	lower := strings.ToLower(word)
 	upper := strings.ToUpper(word)
@@ -91,7 +93,14 @@ func (d *StandardDegenerator) degenerateWord(word string) []string {
 	}
 
 	degens := uniqueExcluding(word, expanded)
+
+	d.mu.Lock()
+	if cached, ok := d.cache[word]; ok {
+		d.mu.Unlock()
+		return cached
+	}
 	d.cache[word] = degens
+	d.mu.Unlock()
 	return degens
 }
 

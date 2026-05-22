@@ -1,7 +1,9 @@
 package gorobinson_test
 
 import (
+	"fmt"
 	"math"
+	"sync"
 	"testing"
 
 	"github.com/jadoint/gorobinson"
@@ -346,6 +348,26 @@ func TestDegeneratorCaching(t *testing.T) {
 	if len(first) != len(second) {
 		t.Errorf("cached result differs from original: %v vs %v", first, second)
 	}
+}
+
+func TestDegeneratorConcurrentUse(t *testing.T) {
+	d := gorobinson.NewStandardDegenerator()
+
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := 0; j < 200; j++ {
+				word := fmt.Sprintf("Concurrent-%d-%d!!", id, j)
+				result := d.Degenerate([]string{word})
+				if len(result[word]) == 0 {
+					t.Errorf("expected degenerates for %q", word)
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 func TestDegeneratorOriginalExcluded(t *testing.T) {
