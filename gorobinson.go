@@ -115,7 +115,7 @@ func New(store storage.Storage, opts ...Option) *Classifier {
 	return &Classifier{
 		config:      cfg,
 		store:       store,
-		lexer:       NewStandardLexer(StandardLexerConfig()),
+		lexer:       NewSpamTokensLexer(),
 		degenerator: NewStandardDegenerator(),
 	}
 }

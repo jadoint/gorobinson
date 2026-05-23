@@ -79,7 +79,9 @@ var (
 	reNumbers  = regexp.MustCompile(`^[0-9]+$`)
 )
 
-// StandardLexer is the default Lexer implementation.
+// StandardLexer is the legacy generic Lexer implementation. New uses
+// SpamTokensLexer by default; construct StandardLexer directly when you need
+// the older generic tokenization rules.
 type StandardLexer struct {
 	config LexerConfig
 }

@@ -7,7 +7,8 @@ Unlike standard Naive Bayesian classifiers, Robinson's method handles rare token
 ## Features
 
 *   **Robinson's Formula:** Superior handling of sparse data (rare tokens).
-*   **Flexible Lexer:** Supports HTML entity decoding, URI extraction, and BBCode/HTML tag filtering.
+*   **Unicode-Aware Default Lexer:** Uses `github.com/jadoint/spam-tokens` by default for HTML, URL, Unicode, and CJK script-aware tokenization.
+*   **Pluggable Lexers:** Keep the default lexer, use the legacy `StandardLexer`, or inject your own lexer with `NewWithComponents`.
 *   **Degenerator:** Automatically checks word variations (case-folding, punctuation stripping) to find matches even for unseen tokens.
 *   **Database Backends:** Built-in support for MySQL and PostgreSQL.
 
@@ -62,6 +63,10 @@ func main() {
 }
 ```
 
+`gorobinson.New` tokenizes raw text with the `spam-tokens` lexer. Pass raw
+input to `Classify`, `Learn`, and `Unlearn`; do not pre-tokenize text before
+calling the classifier.
+
 ### 2. Classify Text
 
 The `Classify` method returns a probability between `0.0` (definitely ham) and `1.0` (definitely spam). A result of `0.5` indicates a neutral or unknown result.
@@ -107,6 +112,18 @@ classifier := gorobinson.New(store,
     gorobinson.WithUseRelevant(15),  // Max tokens to consider per classification
     gorobinson.WithMinDev(0.2),      // Min deviation from 0.5 to be considered significant
 )
+```
+
+### Custom Lexer
+
+The default `SpamTokensLexer` is recommended for spam detection on user content,
+especially when text may contain HTML, URLs, Unicode, or CJK scripts. The older
+generic lexer remains available for experiments or compatibility:
+
+```go
+lexer := gorobinson.NewStandardLexer(gorobinson.StandardLexerConfig())
+degenerator := gorobinson.NewStandardDegenerator()
+classifier := gorobinson.NewWithComponents(store, lexer, degenerator)
 ```
 
 ## License

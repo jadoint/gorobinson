@@ -221,6 +221,36 @@ func TestLearnInvalidCategory(t *testing.T) {
 	}
 }
 
+func TestNewUsesSpamTokensLexerByDefault(t *testing.T) {
+	store := newMemStorage()
+	c := gorobinson.New(store)
+
+	raw := `<a href="https://promo.example/buy">FREE</a> 안녕 친구`
+	if err := c.Learn(raw, gorobinson.Spam); err != nil {
+		t.Fatalf("Learn: %v", err)
+	}
+
+	wantCounts := map[string]int64{
+		"tag_a":         2,
+		"promo.example": 1,
+		"promo":         1,
+		"example":       1,
+		"buy":           1,
+		"free":          1,
+		"script_hangul": 1,
+	}
+	for want, wantCount := range wantCounts {
+		if got := store.tokens[want].CountSpam; got != wantCount {
+			t.Fatalf("token %q CountSpam = %d, want %d; tokens=%v", want, got, wantCount, store.tokens)
+		}
+	}
+	for _, legacy := range []string{"FREE", `<a...>`, "안녕"} {
+		if _, ok := store.tokens[legacy]; ok {
+			t.Fatalf("legacy/default lexer token %q should not be present; tokens=%v", legacy, store.tokens)
+		}
+	}
+}
+
 func TestUnlearnEmptyText(t *testing.T) {
 	c := gorobinson.New(newMemStorage())
 	err := c.Unlearn("", gorobinson.Ham)
