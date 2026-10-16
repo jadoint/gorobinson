@@ -238,13 +238,15 @@ func TestNewUsesSpamTokensLexerByDefault(t *testing.T) {
 		"buy":           1,
 		"free":          1,
 		"script_hangul": 1,
+		"안녕":            2, // spam-tokens v0.2.0: a two-syllable Hangul word is word + bigram
+		"친구":            2,
 	}
 	for want, wantCount := range wantCounts {
 		if got := store.tokens[want].CountSpam; got != wantCount {
 			t.Fatalf("token %q CountSpam = %d, want %d; tokens=%v", want, got, wantCount, store.tokens)
 		}
 	}
-	for _, legacy := range []string{"FREE", `<a...>`, "안녕"} {
+	for _, legacy := range []string{"FREE", `<a...>`} {
 		if _, ok := store.tokens[legacy]; ok {
 			t.Fatalf("legacy/default lexer token %q should not be present; tokens=%v", legacy, store.tokens)
 		}
