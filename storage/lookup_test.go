@@ -582,6 +582,9 @@ func TestGetTokenDataErrors(t *testing.T) {
 			if !errors.Is(err, sentinel) {
 				t.Fatalf("expected errors.Is(err, sentinel), got: %v", err)
 			}
+			if err != sentinel {
+				t.Fatalf("expected the fetch error returned unchanged (identity), got: %v", err)
+			}
 			if data != nil {
 				t.Fatalf("expected nil *TokenData on error, got: %+v", data)
 			}
@@ -595,6 +598,172 @@ func TestGetTokenDataErrors(t *testing.T) {
 				t.Fatalf("Degenerate should be called exactly once before form pass fails, got %d calls", deg.calls)
 			}
 		})
+	}
+}
+
+// TestGetTokenDataDuplicateTokens covers INV-LK-1: a duplicated input token
+// goes through the token pass as given, as in v0.3.1, and is never fetched
+// again in the form pass.
+func TestGetTokenDataDuplicateTokens(t *testing.T) {
+	t.Run("duplicates of found and missing tokens", func(t *testing.T) {
+		tokens := []string{"found", "miss_a", "found", "miss_b", "miss_a", "miss_b", "found"}
+		table := map[string]TokenCount{
+			"found": {CountHam: 1, CountSpam: 2},
+			"form1": {CountHam: 3, CountSpam: 4},
+			"form2": {CountHam: 5, CountSpam: 6},
+		}
+		degMap := map[string][]string{
+			// miss_b is itself a missing, duplicated token; found is a stored token.
+			"miss_a": {"form1", "miss_b", "found", "form2"},
+			"miss_b": {"form1", "miss_a", "form3"},
+		}
+		deg := newRecordingDegenerator(func([]string) map[string][]string { return degMap })
+
+		rf := newRecordingFetch(table)
+		got, err := getTokenData(tokens, deg, rf.fetch)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if deg.calls != 1 {
+			t.Fatalf("expected Degenerate called once, got %d", deg.calls)
+		}
+
+		tokenChunks := (len(tokens) + lookupChunkSize - 1) / lookupChunkSize
+		if len(rf.calls) <= tokenChunks {
+			t.Fatalf("expected a form pass after %d token-pass call(s), got %d calls", tokenChunks, len(rf.calls))
+		}
+		var tokenPassWords []string
+		for _, call := range rf.calls[:tokenChunks] {
+			tokenPassWords = append(tokenPassWords, call...)
+		}
+		if !slices.Equal(tokenPassWords, tokens) {
+			t.Fatalf("token pass: got %v, want the input exactly, duplicates included: %v", tokenPassWords, tokens)
+		}
+
+		formCalls := rf.calls[tokenChunks:]
+		assertFetchInvariants(t, formCalls)
+		isToken := make(map[string]bool, len(tokens))
+		for _, tok := range tokens {
+			isToken[tok] = true
+		}
+		var formPassWords []string
+		for _, call := range formCalls {
+			for _, w := range call {
+				if isToken[w] {
+					t.Errorf("input token %q fetched again in the form pass", w)
+				}
+			}
+			formPassWords = append(formPassWords, call...)
+		}
+		if want := []string{"form1", "form2", "form3"}; !slices.Equal(formPassWords, want) {
+			t.Fatalf("form pass: got %v, want %v", formPassWords, want)
+		}
+
+		want, err := referenceGet(tokens, deg, exactFetch(table))
+		if err != nil {
+			t.Fatalf("referenceGet: %v", err)
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("getTokenData differs from referenceGet:\ngot  %+v\nwant %+v", got, want)
+		}
+	})
+
+	// The same word at indexes 999 and 1000 lands in two token-pass calls, so
+	// it is fetched twice there, which INV-LK-1 allows.
+	for _, stored := range []bool{true, false} {
+		t.Run(fmt.Sprintf("straddles chunk boundary/stored=%t", stored), func(t *testing.T) {
+			const n = lookupChunkSize + 2
+			tokens := make([]string, n)
+			for i := range tokens {
+				tokens[i] = fmt.Sprintf("w%04d", i)
+			}
+			tokens[lookupChunkSize-1] = "dup"
+			tokens[lookupChunkSize] = "dup"
+
+			table := map[string]TokenCount{"form_dup": {CountHam: 7, CountSpam: 8}}
+			if stored {
+				table["dup"] = TokenCount{CountHam: 9, CountSpam: 10}
+			}
+			deg := refDegenerator{forms: func(w string) []string { return []string{"form_" + w} }}
+
+			rf := newRecordingFetch(table)
+			got, err := getTokenData(tokens, deg, rf.fetch)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			tokenChunks := (n + lookupChunkSize - 1) / lookupChunkSize
+			if len(rf.calls) < tokenChunks {
+				t.Fatalf("expected at least %d token-pass calls, got %d calls", tokenChunks, len(rf.calls))
+			}
+			var tokenPassWords []string
+			dupCalls := 0
+			for _, call := range rf.calls[:tokenChunks] {
+				tokenPassWords = append(tokenPassWords, call...)
+				if slices.Contains(call, "dup") {
+					dupCalls++
+				}
+			}
+			if !slices.Equal(tokenPassWords, tokens) {
+				t.Fatalf("token pass calls concatenated do not equal the input")
+			}
+			if dupCalls != 2 {
+				t.Fatalf("dup should be fetched in two token-pass calls, got %d", dupCalls)
+			}
+			for _, call := range rf.calls[tokenChunks:] {
+				if slices.Contains(call, "dup") {
+					t.Fatalf("dup fetched again in the form pass: %v", call)
+				}
+			}
+			assertFetchInvariants(t, rf.calls[tokenChunks:])
+
+			want, err := referenceGet(tokens, deg, exactFetch(table))
+			if err != nil {
+				t.Fatalf("referenceGet: %v", err)
+			}
+			if !reflect.DeepEqual(got, want) {
+				t.Fatalf("getTokenData differs from referenceGet")
+			}
+		})
+	}
+}
+
+// TestGetTokenDataRepeatedFormUnderKey covers INV-LK-5: a form named twice
+// under one key gives one entry.
+func TestGetTokenDataRepeatedFormUnderKey(t *testing.T) {
+	tokens := []string{"miss"}
+	table := map[string]TokenCount{"form": {CountHam: 11, CountSpam: 12}}
+	deg := newRecordingDegenerator(func([]string) map[string][]string {
+		return map[string][]string{"miss": {"form", "form", "gone"}}
+	})
+
+	rf := newRecordingFetch(table)
+	got, err := getTokenData(tokens, deg, rf.fetch)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rf.calls) != 2 {
+		t.Fatalf("expected 2 fetch calls (token pass + form pass), got %d", len(rf.calls))
+	}
+	if want := []string{"form", "gone"}; !slices.Equal(rf.calls[1], want) {
+		t.Fatalf("form pass: got %v, want each form once: %v", rf.calls[1], want)
+	}
+	assertFetchInvariants(t, rf.calls[1:])
+
+	entries := got.Degenerates["miss"]
+	if len(entries) != 1 {
+		t.Fatalf("Degenerates[miss]: got %d entries, want exactly 1: %v", len(entries), entries)
+	}
+	if tc, ok := entries["form"]; !ok || tc != table["form"] {
+		t.Fatalf("Degenerates[miss][form]: got %+v (present=%t), want %+v", tc, ok, table["form"])
+	}
+
+	want, err := referenceGet(tokens, deg, exactFetch(table))
+	if err != nil {
+		t.Fatalf("referenceGet: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("getTokenData differs from referenceGet:\ngot  %+v\nwant %+v", got, want)
 	}
 }
 
