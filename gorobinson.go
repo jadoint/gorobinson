@@ -19,6 +19,7 @@ package gorobinson
 import (
 	"errors"
 	"math"
+	"strings"
 
 	"github.com/jadoint/gorobinson/storage"
 )
@@ -175,14 +176,8 @@ func (c *Classifier) Classify(text string) (float64, error) {
 		importances[word] = math.Abs(0.5 - p)
 	}
 
-	sorted := sortedKeysByValueDesc(importances)
-
 	relevant := make([]float64, 0, c.config.UseRelevant)
-	for i := 0; i < c.config.UseRelevant && i < len(sorted); i++ {
-		token := sorted[i]
-		if math.Abs(0.5-ratings[token]) <= c.config.MinDev {
-			break
-		}
+	for _, token := range topRelevant(importances, c.config.UseRelevant, c.config.MinDev) {
 		count := tokens[token]
 		for x := 0; x < count; x++ {
 			relevant = append(relevant, ratings[token])
@@ -254,11 +249,14 @@ func (c *Classifier) tokenProbability(
 	}
 
 	if degenerates, ok := tokenData.Degenerates[word]; ok {
-		rating := 0.5
-		for _, data := range degenerates {
+		// The form deviating most from 0.5 wins; of two that deviate equally,
+		// the one whose bytes sort first, so map order never decides.
+		rating, chosen := 0.5, ""
+		for form, data := range degenerates {
 			candidate := c.robinsonProbability(data, textsHam, textsSpam)
-			if math.Abs(0.5-candidate) > math.Abs(0.5-rating) {
-				rating = candidate
+			dev, best := math.Abs(0.5-candidate), math.Abs(0.5-rating)
+			if dev > best || (dev == best && strings.Compare(form, chosen) < 0) {
+				rating, chosen = candidate, form
 			}
 		}
 		return rating
@@ -290,18 +288,52 @@ func (c *Classifier) robinsonProbability(data storage.TokenCount, textsHam, text
 	return (c.config.RobS*c.config.RobX + all*rating) / (c.config.RobS + all)
 }
 
-// sortedKeysByValueDesc returns the keys of m sorted by their float64 values
-// in descending order. Insertion sort is used because UseRelevant is typically
-// small (default 15).
-func sortedKeysByValueDesc(m map[string]float64) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+// topRelevant returns at most k tokens whose importance is strictly greater
+// than minDev, most important first, and tokens of equal importance in
+// strings.Compare order, so the selection never depends on map order. It makes
+// one pass over importances, keeping the best k so far in result order: O(n·k)
+// with one allocation for the buffer, however many tokens the text has.
+func topRelevant(importances map[string]float64, k int, minDev float64) []string {
+	if k <= 0 {
+		return nil
 	}
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && m[keys[j]] > m[keys[j-1]]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
+
+	type entry struct {
+		token      string
+		importance float64
+	}
+	// ranksBefore reports whether (token, importance) belongs ahead of e.
+	ranksBefore := func(token string, importance float64, e entry) bool {
+		return importance > e.importance ||
+			(importance == e.importance && strings.Compare(token, e.token) < 0)
+	}
+
+	top := make([]entry, 0, min(k, len(importances)))
+	for token, importance := range importances {
+		// Written as !(>) so a NaN importance never qualifies.
+		if !(importance > minDev) {
+			continue
 		}
+		if len(top) == k && !ranksBefore(token, importance, top[k-1]) {
+			continue
+		}
+		i := len(top)
+		for i > 0 && ranksBefore(token, importance, top[i-1]) {
+			i--
+		}
+		if len(top) < k {
+			top = append(top, entry{})
+		}
+		copy(top[i+1:], top[i:len(top)-1])
+		top[i] = entry{token: token, importance: importance}
 	}
-	return keys
+
+	if len(top) == 0 {
+		return nil
+	}
+	result := make([]string, len(top))
+	for i, e := range top {
+		result[i] = e.token
+	}
+	return result
 }

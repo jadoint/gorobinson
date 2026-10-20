@@ -138,6 +138,64 @@ func TestClassifyZeroCountTokenReturnsFiniteNeutralScore(t *testing.T) {
 	}
 }
 
+// mapLexer is a Lexer that returns a fixed token map whatever the text.
+type mapLexer map[string]int
+
+func (l mapLexer) GetTokens(string) (map[string]int, error) {
+	return l, nil
+}
+
+// TestClassifyRepeatableWithTies pins INV-SEL-3: when more tokens than
+// UseRelevant tie on importance, with opposite ratings, Classify picks the
+// bytewise-first ones and returns the same score on every call. The tie is
+// exact in floating point (INV-SEL-7): RobS 0, TextsHam == TextsSpam == 16,
+// and count pairs (1, 3) and (3, 1), rated exactly 0.75 and 0.25.
+func TestClassifyRepeatableWithTies(t *testing.T) {
+	store := newMemStorage()
+	store.internals = storage.Internals{TextsHam: 16, TextsSpam: 16}
+
+	// tie00..tie39: even ones spammy, odd ones hammy, so the 15 bytewise-first
+	// (tie00..tie14) mix both ratings and the other 25 tie with them.
+	all := mapLexer{}
+	first := mapLexer{}
+	for i := 0; i < 40; i++ {
+		word := fmt.Sprintf("tie%02d", i)
+		if i%2 == 0 {
+			store.tokens[word] = storage.TokenCount{CountHam: 1, CountSpam: 3}
+		} else {
+			store.tokens[word] = storage.TokenCount{CountHam: 3, CountSpam: 1}
+		}
+		all[word] = 1
+		if i < 15 {
+			first[word] = 1
+		}
+	}
+
+	classify := func(lexer mapLexer) float64 {
+		t.Helper()
+		c := gorobinson.NewWithComponents(store, lexer, gorobinson.NewStandardDegenerator(), gorobinson.WithRobS(0))
+		score, err := c.Classify("text")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		return score
+	}
+
+	// A one-token text scores exactly its token's rating, so this asserts
+	// the tie the test relies on before relying on it.
+	spammy, hammy := classify(mapLexer{"tie00": 1}), classify(mapLexer{"tie01": 1})
+	if spammy != 0.75 || hammy != 0.25 || math.Abs(0.5-spammy) != math.Abs(0.5-hammy) {
+		t.Fatalf("tie is not exact: ratings %v and %v", spammy, hammy)
+	}
+
+	want := classify(first)
+	for i := 0; i < 200; i++ {
+		if got := classify(all); math.Float64bits(got) != math.Float64bits(want) {
+			t.Fatalf("call %d: got %v, want %v (the 15 bytewise-first tokens' score)", i, got, want)
+		}
+	}
+}
+
 func TestLearnAndClassifySpam(t *testing.T) {
 	store := newMemStorage()
 	c := gorobinson.New(store)

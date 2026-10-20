@@ -114,6 +114,10 @@ classifier := gorobinson.New(store,
 )
 ```
 
+`Classify` uses the `UseRelevant` tokens that deviate most from 0.5, counting
+only those above `MinDev`, and takes tokens that tie in the token's byte order,
+so the same text always gets the same score.
+
 ### Custom Lexer
 
 The default `SpamTokensLexer` is recommended for spam detection on user content,
