@@ -1,0 +1,14 @@
+version: "2"
+
+# Lint config for gorobinson. The default linter set, with the one errcheck
+# exclusion spam/spam-robinson/.golangci.yml also makes for the same reason.
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+
+  settings:
+    errcheck:
+      exclude-functions:
+        # Closing a read-only result set reports nothing the caller can use;
+        # a failed read surfaces through rows.Err.
+        - (*database/sql.Rows).Close
