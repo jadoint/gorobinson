@@ -3,6 +3,7 @@ package gorobinson_test
 import (
 	"fmt"
 	"math"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -448,12 +449,12 @@ func TestDegeneratorTrailingDots(t *testing.T) {
 	}
 }
 
-func TestDegeneratorCaching(t *testing.T) {
+func TestDegeneratorRepeatable(t *testing.T) {
 	d := gorobinson.NewStandardDegenerator()
 	first := d.Degenerate([]string{"World"})["World"]
 	second := d.Degenerate([]string{"World"})["World"]
-	if len(first) != len(second) {
-		t.Errorf("cached result differs from original: %v vs %v", first, second)
+	if !reflect.DeepEqual(first, second) {
+		t.Errorf("second call differs from the first: %v vs %v", first, second)
 	}
 }
 
