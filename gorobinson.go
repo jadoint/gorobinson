@@ -291,8 +291,9 @@ func (c *Classifier) robinsonProbability(data storage.TokenCount, textsHam, text
 // topRelevant returns at most k tokens whose importance is strictly greater
 // than minDev, most important first, and tokens of equal importance in
 // strings.Compare order, so the selection never depends on map order. It makes
-// one pass over importances, keeping the best k so far in result order: O(n·k)
-// with one allocation for the buffer, however many tokens the text has.
+// one pass over importances, keeping the best k so far in result order:
+// O(n·k), with two allocations (the k-entry buffer and the result) however
+// many tokens the text has.
 func topRelevant(importances map[string]float64, k int, minDev float64) []string {
 	if k <= 0 {
 		return nil
