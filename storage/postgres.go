@@ -41,46 +41,11 @@ func (p *Postgres) GetInternals() (Internals, error) {
 
 // Get implements Storage.
 func (p *Postgres) Get(tokens []string, deg Degenerator) (*TokenData, error) {
-	if len(tokens) == 0 {
-		return &TokenData{
-			Tokens:      make(map[string]TokenCount),
-			Degenerates: make(map[string]map[string]TokenCount),
-		}, nil
-	}
-
-	found, err := p.fetchTokens(tokens)
-	if err != nil {
-		return nil, err
-	}
-
-	missing := make([]string, 0, len(tokens))
-	for _, t := range tokens {
-		if _, ok := found[t]; !ok {
-			missing = append(missing, t)
-		}
-	}
-
-	degenerates := make(map[string]map[string]TokenCount)
-	if len(missing) > 0 && deg != nil {
-		degMap := deg.Degenerate(missing)
-		for original, forms := range degMap {
-			degFound, err := p.fetchTokens(forms)
-			if err != nil {
-				return nil, err
-			}
-			if len(degFound) > 0 {
-				degenerates[original] = degFound
-			}
-		}
-	}
-
-	return &TokenData{
-		Tokens:      found,
-		Degenerates: degenerates,
-	}, nil
+	return getTokenData(tokens, deg, p.fetchTokens)
 }
 
-// fetchTokens executes a single SELECT ... WHERE token IN (...) query.
+// fetchTokens executes a single SELECT ... WHERE token IN (...) query over
+// one chunk of at most lookupChunkSize words. It is Get's fetchFunc.
 func (p *Postgres) fetchTokens(words []string) (map[string]TokenCount, error) {
 	if len(words) == 0 {
 		return make(map[string]TokenCount), nil
