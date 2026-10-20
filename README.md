@@ -20,7 +20,7 @@ You must create the word-list table in your database before using the classifier
 
 ```sql
 CREATE TABLE spam_tokens (
-    token      VARCHAR(255) NOT NULL,
+    token      VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
     count_ham  INT UNSIGNED NOT NULL DEFAULT 0,
     count_spam INT UNSIGNED NOT NULL DEFAULT 0,
     PRIMARY KEY (token)
