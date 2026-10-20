@@ -1,10 +1,6 @@
 package gorobinson
 
-import (
-	"regexp"
-	"strings"
-	"sync"
-)
+import "strings"
 
 // Degenerator produces alternative forms ("degenerates") of a word so that
 // the classifier can find a probability even for tokens not seen during
@@ -15,47 +11,30 @@ type Degenerator interface {
 	Degenerate(words []string) map[string][]string
 }
 
-// Compiled regular expressions for the standard degenerator.
-var (
-	reTrailPunctDeg = regexp.MustCompile(`[!?]+$`)
-	reMultiPunctDeg = regexp.MustCompile(`[!?]{2,}$`)
-	reSinglePunct   = regexp.MustCompile(`([!?])+$`)
-	reTrailDotDeg   = regexp.MustCompile(`\.$`)
-)
-
 // StandardDegenerator is the default Degenerator implementation.
-// It is safe for concurrent use.
-type StandardDegenerator struct {
-	mu    sync.RWMutex
-	cache map[string][]string
-}
+// It is safe for concurrent use: it holds no state, and works out each word's
+// forms afresh on every call.
+type StandardDegenerator struct{}
 
-// NewStandardDegenerator constructs a StandardDegenerator with an empty cache.
+// NewStandardDegenerator constructs a StandardDegenerator.
 func NewStandardDegenerator() *StandardDegenerator {
-	return &StandardDegenerator{
-		cache: make(map[string][]string),
-	}
+	return &StandardDegenerator{}
 }
 
 // Degenerate implements Degenerator.
 func (d *StandardDegenerator) Degenerate(words []string) map[string][]string {
 	result := make(map[string][]string, len(words))
 	for _, word := range words {
-		result[word] = d.degenerateWord(word)
+		result[word] = degenerateWord(word)
 	}
 	return result
 }
 
-// degenerateWord returns the cached degenerate list for word, computing and
-// caching it on the first call.
-func (d *StandardDegenerator) degenerateWord(word string) []string {
-	d.mu.RLock()
-	if cached, ok := d.cache[word]; ok {
-		d.mu.RUnlock()
-		return cached
-	}
-	d.mu.RUnlock()
-
+// degenerateWord returns the degenerate forms of word: its case forms, then
+// each candidate with its trailing run of '!' and '?' collapsed to the run's
+// last byte (for a run of two or more) and stripped, then with its trailing
+// dots stripped one at a time.
+func degenerateWord(word string) []string {
 	lower := strings.ToLower(word)
 	upper := strings.ToUpper(word)
 
@@ -76,32 +55,38 @@ func (d *StandardDegenerator) degenerateWord(word string) []string {
 	copy(expanded, candidates)
 
 	for _, alt := range candidates {
-		if reTrailPunctDeg.MatchString(alt) {
-			if reMultiPunctDeg.MatchString(alt) {
-				tmp := reSinglePunct.ReplaceAllString(alt, "$1")
+		if n := trailingQB(alt); n > 0 {
+			if n >= 2 {
+				tmp := alt[:len(alt)-n] + alt[len(alt)-1:]
 				expanded = appendIfAbsent(expanded, word, tmp)
 			}
-			tmp := reTrailPunctDeg.ReplaceAllString(alt, "")
+			tmp := alt[:len(alt)-n]
 			expanded = appendIfAbsent(expanded, word, tmp)
 		}
 
 		cur := alt
-		for reTrailDotDeg.MatchString(cur) {
+		for strings.HasSuffix(cur, ".") {
 			cur = cur[:len(cur)-1]
 			expanded = appendIfAbsent(expanded, word, cur)
 		}
 	}
 
-	degens := uniqueExcluding(word, expanded)
+	return uniqueExcluding(word, expanded)
+}
 
-	d.mu.Lock()
-	if cached, ok := d.cache[word]; ok {
-		d.mu.Unlock()
-		return cached
+// trailingQB returns the number of trailing bytes of s that are '!' or '?',
+// counted from the end up to the first other byte. Both are ASCII, and no
+// byte of a UTF-8 multi-byte sequence is below 0x80, so byte checks give the
+// same answer as a regular expression for every string, valid UTF-8 or not.
+func trailingQB(s string) int {
+	n := 0
+	for n < len(s) {
+		if c := s[len(s)-1-n]; c != '!' && c != '?' {
+			break
+		}
+		n++
 	}
-	d.cache[word] = degens
-	d.mu.Unlock()
-	return degens
+	return n
 }
 
 // uniqueExcluding returns a new slice containing the elements of list that are
